@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator, Alert, AppState, AppStateStatus } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { AppHeader } from '../../src/components/ui';
 import { PrimaryButton } from '../../src/components/buttons';
@@ -14,10 +14,13 @@ export default function AttendanceFlowOrchestrator() {
   const [checking, setChecking] = useState(true);
   const [permissionsPassed, setPermissionsPassed] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const appState = useRef(AppState.currentState);
+  const devOptionsAlertShown = useRef(false);
 
   const runPreflight = async () => {
     setChecking(true);
     setErrorMsg('');
+    devOptionsAlertShown.current = false;
 
     try {
       const cameraOk = await requestCameraPermission();
@@ -37,8 +40,30 @@ export default function AttendanceFlowOrchestrator() {
       }
 
       if (!deviceCheck.allowedToProceed) {
-        setErrorMsg(deviceCheck.message);
         setChecking(false);
+        if (deviceCheck.isDeveloperOptionsEnabled) {
+          devOptionsAlertShown.current = true;
+          Alert.alert(
+            '🔒 Developer Options Enabled',
+            'Attendance marking is blocked because Developer Options (or USB Debugging) is enabled on your device.\n\nThis is a security requirement to prevent GPS spoofing and attendance manipulation.\n\nPlease disable Developer Options in your phone settings to continue.',
+            [
+              {
+                text: 'Open Settings',
+                onPress: async () => {
+                  await DeviceService.openDeveloperSettings();
+                },
+              },
+              {
+                text: 'Cancel',
+                style: 'cancel',
+                onPress: () => router.replace('/(tabs)'),
+              },
+            ],
+            { cancelable: false }
+          );
+        } else {
+          setErrorMsg(deviceCheck.message);
+        }
         return;
       }
 
@@ -64,6 +89,21 @@ export default function AttendanceFlowOrchestrator() {
 
   useEffect(() => {
     runPreflight();
+
+    // Re-run preflight when user returns to app from Settings
+    const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+      if (
+        appState.current.match(/inactive|background/) &&
+        nextState === 'active' &&
+        devOptionsAlertShown.current
+      ) {
+        // User came back from Settings — recheck
+        runPreflight();
+      }
+      appState.current = nextState;
+    });
+
+    return () => subscription.remove();
   }, []);
 
   return (

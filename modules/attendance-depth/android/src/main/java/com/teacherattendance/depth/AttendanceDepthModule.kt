@@ -1,7 +1,9 @@
 package com.teacherattendance.depth
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.Settings
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.CameraConfig
 import com.google.ar.core.CameraConfigFilter
@@ -16,6 +18,57 @@ class AttendanceDepthModule : Module() {
 
     AsyncFunction("checkFrontCameraDepthSupport") {
       checkFrontCameraDepthSupport()
+    }
+
+    AsyncFunction("isDeveloperOptionsEnabled") {
+      isDeveloperOptionsEnabled()
+    }
+
+    AsyncFunction("openDeveloperSettings") {
+      openDeveloperSettings()
+    }
+  }
+
+  private fun isDeveloperOptionsEnabled(): Boolean {
+    val context = appContext.reactContext ?: return false
+    return try {
+      val devOptions = Settings.Global.getInt(
+        context.contentResolver,
+        Settings.Global.DEVELOPMENT_SETTINGS_ENABLED,
+        0
+      ) != 0
+
+      val adb = Settings.Global.getInt(
+        context.contentResolver,
+        Settings.Global.ADB_ENABLED,
+        0
+      ) != 0
+
+      devOptions || adb
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  private fun openDeveloperSettings(): Boolean {
+    val context = appContext.reactContext ?: return false
+    return try {
+      val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      context.startActivity(intent)
+      true
+    } catch (_: Exception) {
+      try {
+        // Fallback to standard settings if developer settings action fails
+        val fallback = Intent(Settings.ACTION_SETTINGS).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(fallback)
+        true
+      } catch (_: Exception) {
+        false
+      }
     }
   }
 

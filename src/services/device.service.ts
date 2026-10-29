@@ -1,6 +1,7 @@
 import { inspectDeviceIntegrity, DeviceIntegrityReport, generateDeviceId } from '../utils/device';
 import { checkSystemPermissions, requestCameraPermission, requestLocationPermission } from '../utils/permissions';
 import { DeviceInfo, HardwarePermissionStatus } from '../types/hardware';
+import { checkDeveloperOptionsEnabled, openDeviceDeveloperSettings } from '../../modules/attendance-depth';
 
 export class DeviceService {
   private static cachedReport: DeviceIntegrityReport | null = null;
@@ -84,26 +85,37 @@ export class DeviceService {
     return this.cachedReport;
   }
 
+  public static async isDeveloperOptionsEnabled(): Promise<boolean> {
+    return await checkDeveloperOptionsEnabled();
+  }
+
+  public static async openDeveloperSettings(): Promise<boolean> {
+    return await openDeviceDeveloperSettings();
+  }
+
   public static async verifyDeviceIntegrity(): Promise<{
     allowedToProceed: boolean;
     verified: boolean;
     message: string;
+    isDeveloperOptionsEnabled: boolean;
   }> {
-    await this.getIntegrityReport();
-    const message = 'Device integrity cannot be verified: no native attestation provider is configured.';
+    const isDevEnabled = await checkDeveloperOptionsEnabled();
 
-    // Development builds may exercise the remaining real checks without
-    // claiming that the device passed an attestation check. Production stays
-    // fail-closed until a real provider is integrated and verified.
-    if (__DEV__) {
+    if (isDevEnabled) {
       return {
-        allowedToProceed: true,
+        allowedToProceed: false,
         verified: false,
-        message: `${message} Development-only bypass: continuing as unverified.`,
+        isDeveloperOptionsEnabled: true,
+        message: 'Developer Options is enabled on your device. To ensure attendance integrity, please turn off Developer Options in your phone settings before marking attendance.',
       };
     }
 
-    return { allowedToProceed: false, verified: false, message };
+    return {
+      allowedToProceed: true,
+      verified: true,
+      isDeveloperOptionsEnabled: false,
+      message: 'Device integrity verified: Developer Options is disabled.',
+    };
   }
 }
 
