@@ -85,7 +85,7 @@ export default function LoginScreen() {
               label="API Base URL"
               value={customServerUrl}
               onChangeText={setCustomServerUrl}
-              placeholder="http://192.168.1.xxx:3001/api"
+              placeholder="https://ai-attendance-backend-peh3.onrender.com/api"
               autoCapitalize="none"
             />
             <PrimaryButton

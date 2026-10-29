@@ -126,7 +126,7 @@ export default function SyncSettingsScreen() {
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
-            placeholder="http://192.168.1.20:3001/api"
+            placeholder="https://ai-attendance-backend-peh3.onrender.com/api"
             placeholderTextColor="#64748B"
             style={styles.serverInput}
           />

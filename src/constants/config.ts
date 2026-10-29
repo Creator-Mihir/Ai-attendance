@@ -49,9 +49,8 @@ export function resolveApiBaseUrl(): string {
   if (platform !== 'web') {
     if (expoHost) return `http://${expoHost}:3001/api`;
     if (platform === 'android' && !isPhysicalDevice) return 'http://10.0.2.2:3001/api';
-    // Fallback for a native build without Expo host metadata. Users can replace
-    // this value in Sync & Offline Pipeline settings with the computer's LAN IP.
-    return 'http://10.160.91.199:3001/api';
+    // Deployed Render production backend URL.
+    return 'https://ai-attendance-backend-peh3.onrender.com/api';
   }
 
   // In a browser, localhost is the same computer running the browser.
