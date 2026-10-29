@@ -1,0 +1,102 @@
+# Set by expo-router. This enables Fabric-only features from react-native-screens
+ENV['RNS_GAMMA_ENABLED'] ||= '1'
+require File.join(File.dirname(`node --print "require.resolve('expo/package.json')"`), "scripts/autolinking")
+require File.join(File.dirname(`node --print "require.resolve('react-native/package.json')"`), "scripts/react_native_pods")
+
+require 'json'
+podfile_properties = JSON.parse(File.read(File.join(__dir__, 'Podfile.properties.json'))) rescue {}
+
+def ccache_enabled?(podfile_properties)
+  # Environment variable takes precedence
+  return ENV['USE_CCACHE'] == '1' if ENV['USE_CCACHE']
+
+  # Fall back to Podfile properties
+  podfile_properties['apple.ccacheEnabled'] == 'true'
+end
+
+ENV['EX_DEV_CLIENT_NETWORK_INSPECTOR'] ||= podfile_properties['EX_DEV_CLIENT_NETWORK_INSPECTOR']
+ENV['RCT_USE_RN_DEP'] ||= podfile_properties['ios.buildReactNativeFromSource'] == 'true' ? '0' : '1'
+ENV['RCT_USE_PREBUILT_RNCORE'] ||= podfile_properties['ios.buildReactNativeFromSource'] == 'true' ? '0' : '1'
+ENV['RCT_HERMES_V1_ENABLED'] ||= '0' if podfile_properties['expo.useHermesV1'] == 'false'
+# An explicit `ios.usePrecompiledModules: false` must win even when the env var is already set
+# (e.g. EXPO_USE_PRECOMPILED_MODULES exported by EAS Build), so force-disable here before the default.
+ENV['EXPO_USE_PRECOMPILED_MODULES'] = '0' if podfile_properties['EXPO_USE_PRECOMPILED_MODULES'] == 'false'
+ENV['EXPO_USE_PRECOMPILED_MODULES'] ||= '1'
+platform :ios, podfile_properties['ios.deploymentTarget'] || '16.4'
+
+prepare_react_native_project!
+
+target 'TeacherAttendanceAI' do
+  use_expo_modules!
+
+  if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
+    config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
+  else
+    config_command = [
+      'node',
+      '--no-warnings',
+      '--eval',
+      'require(\'expo/bin/autolinking\')',
+      'expo-modules-autolinking',
+      'react-native-config',
+      '--json',
+      '--platform',
+      'ios'
+    ]
+  end
+
+  config = use_native_modules!(config_command)
+
+  use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']
+  use_frameworks! :linkage => ENV['USE_FRAMEWORKS'].to_sym if ENV['USE_FRAMEWORKS']
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    :hermes_enabled => podfile_properties['expo.jsEngine'] == nil || podfile_properties['expo.jsEngine'] == 'hermes',
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/..",
+    :privacy_file_aggregation_enabled => podfile_properties['apple.privacyManifestAggregationEnabled'] != 'false',
+  )
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      :ccache_enabled => ccache_enabled?(podfile_properties),
+    )
+  end
+end
+
+# @nitro-mlkit/face-detection: strip GoogleMLKit frameworks from simulator link
+post_integrate do |installer|
+  mlkit_frameworks = ['MLImage', 'MLKitCommon', 'MLKitFaceDetection', 'MLKitVision', 'TensorFlowLiteC', 'TensorFlowLiteCCoreML', 'TensorFlowLiteCMetal']
+  mlkit_libs = ['TensorFlowLiteSwift']
+  installer.aggregate_targets.each do |aggregate_target|
+    aggregate_target.user_build_configurations.keys.each do |config_name|
+      xcconfig_path = aggregate_target.xcconfig_path(config_name)
+      next unless File.exist?(xcconfig_path)
+      lines = File.read(xcconfig_path).split("\n")
+      base_idx = lines.index { |l| l.start_with?('OTHER_LDFLAGS = ') }
+      sim_idx = lines.index { |l| l.start_with?('OTHER_LDFLAGS[sdk=iphonesimulator*] = ') }
+      next unless base_idx
+      base = lines[base_idx].sub('OTHER_LDFLAGS = ', '').gsub('$(inherited)', '').strip
+      mlkit_frameworks.each do |fw|
+        base = base.gsub(/-framework\s+"#{fw}"\s*/, '')
+      end
+      mlkit_libs.each do |lib|
+        base = base.gsub(/-l"#{lib}"\s*/, '')
+      end
+      # SDK 55 generated a simulator-specific OTHER_LDFLAGS line we could edit;
+      # SDK 57 / RN 0.86 no longer does, so create it when it's missing — an
+      # sdk-qualified line fully overrides the base one for simulator builds.
+      if sim_idx
+        sim_extra = lines[sim_idx].sub('OTHER_LDFLAGS[sdk=iphonesimulator*] = ', '').gsub('$(inherited)', '').strip
+        lines[sim_idx] = "OTHER_LDFLAGS[sdk=iphonesimulator*] = #{base} #{sim_extra}".strip
+      else
+        lines.insert(base_idx + 1, "OTHER_LDFLAGS[sdk=iphonesimulator*] = #{base}".strip)
+      end
+      File.write(xcconfig_path, lines.join("\n"))
+    end
+  end
+end

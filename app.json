@@ -1,0 +1,65 @@
+{
+  "expo": {
+    "name": "Teacher Attendance AI",
+    "slug": "teacher-attendance-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "teacherattendance",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow Teacher Attendance to use camera for facial recognition & liveness check.",
+        "NSMicrophoneUsageDescription": "Allow Teacher Attendance to use microphone for spoken liveness challenge.",
+        "NSLocationWhenInUseUsageDescription": "Allow Teacher Attendance to verify your campus geofence location.",
+        "NSFaceIDUsageDescription": "Authenticate using Face ID for quick login."
+      },
+      "bundleIdentifier": "com.anonymous.teacherattendanceapp"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundColor": "#0F172A"
+      },
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "USE_BIOMETRIC",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.anonymous.teacherattendanceapp"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-camera",
+      "expo-asset",
+      "expo-local-authentication",
+      "@nitro-mlkit/face-recognition",
+      "@rbayuokt/expo-face-vision",
+      "./plugins/with-arcore",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow Teacher Attendance to use the microphone for the spoken liveness challenge.",
+          "speechRecognitionPermission": "Allow Teacher Attendance to recognize the spoken liveness challenge on this device.",
+          "androidSpeechServicePackages": ["com.google.android.as"]
+        }
+      ]
+    ]
+  }
+}

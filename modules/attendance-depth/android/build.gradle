@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.teacherattendance.depth'
+version = '1.0.0'
+
+android {
+  namespace 'com.teacherattendance.depth'
+
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}
+
+dependencies {
+  implementation 'com.google.ar:core:1.56.0'
+}
