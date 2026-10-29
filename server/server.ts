@@ -26,14 +26,19 @@ if (process.env.NODE_ENV === 'production') {
 export const app = express();
 const PORT = process.env.PORT || 3001;
 
-const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean);
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
   next();
 });
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)) return callback(null, true);
+    const normalized = (origin || '').replace(/\/$/, '');
+    if (!origin || process.env.NODE_ENV !== 'production' || allowedOrigins.includes(normalized)) return callback(null, true);
     return callback(new Error('This browser origin is not allowed by the API CORS policy.'));
   },
   credentials: true,
