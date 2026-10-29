@@ -5,7 +5,7 @@ const USER_KEY = 'ai_attend_admin_user';
 const API_BASE_KEY = 'ai_attend_admin_base';
 
 export class ApiService {
-  private static baseUrl = localStorage.getItem(API_BASE_KEY) || '/api';
+  private static baseUrl = localStorage.getItem(API_BASE_KEY) || (import.meta as any).env?.VITE_API_BASE_URL || '/api';
 
   public static getBaseUrl(): string {
     return this.baseUrl;
