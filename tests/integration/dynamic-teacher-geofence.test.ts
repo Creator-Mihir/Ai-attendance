@@ -19,7 +19,7 @@ async function runLocationTestOnly() {
 
   try {
     // 1. Fetch schools from database
-    const schools = backendDb.getSchools();
+    const schools = await backendDb.getSchools();
     const schoolA = schools[0];
     const schoolB = schools[1];
 
@@ -27,12 +27,12 @@ async function runLocationTestOnly() {
     console.log(`Registered School B: "${schoolB.name}" at (${schoolB.latitude}, ${schoolB.longitude})\n`);
 
     // 2. Identify teacher Chitta
-    const teachers = backendDb.getTeachers();
+    const teachers = await backendDb.getTeachers();
     const chitta = teachers.find((t) => t.full_name?.toLowerCase().includes('chitta')) || teachers[0];
     console.log(`Testing with Faculty: "${chitta.full_name}" (Code: ${chitta.employee_code})`);
 
     // Assign Chitta to School A first
-    backendDb.updateTeacherSchool(chitta.id, schoolA.id, schoolA.name);
+    await backendDb.updateTeacherSchool(chitta.id, schoolA.id, schoolA.name);
 
     // 3. Login as Chitta
     console.log('\n[1] Teacher Login: fetching dynamic campus coordinates...');
@@ -66,7 +66,7 @@ async function runLocationTestOnly() {
 
     // 6. State Admin reassigns Chitta to School B
     console.log('\n[3] State Admin changes Chitta\'s School to School B...');
-    backendDb.updateTeacherSchool(chitta.id, schoolB.id, schoolB.name);
+    await backendDb.updateTeacherSchool(chitta.id, schoolB.id, schoolB.name);
 
     // 7. Chitta logs in again -> dynamic coordinates for School B are delivered
     const loginResB = await fetch(`${BASE_URL}/auth/login`, {

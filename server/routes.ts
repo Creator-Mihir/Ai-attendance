@@ -55,7 +55,7 @@ function formatTeacherResponse(row: any) {
 }
 
 // 1. TEACHER REGISTRATION
-apiRouter.post('/auth/register', (req: Request, res: Response): any => {
+apiRouter.post('/auth/register', async (req: Request, res: Response): Promise<any> => {
   try {
     const {
       fullName,
@@ -88,7 +88,7 @@ apiRouter.post('/auth/register', (req: Request, res: Response): any => {
     }
 
     // Check duplicate employee code
-    const existingCode = backendDb.getTeacherByIdentifier(employeeCode);
+    const existingCode = await backendDb.getTeacherByIdentifier(employeeCode);
     if (existingCode) {
       return res.status(409).json({
         success: false,
@@ -99,7 +99,7 @@ apiRouter.post('/auth/register', (req: Request, res: Response): any => {
 
     // Check duplicate email
     if (email) {
-      const existingEmail = backendDb.getTeacherByIdentifier(email);
+      const existingEmail = await backendDb.getTeacherByIdentifier(email);
       if (existingEmail) {
         return res.status(409).json({
           success: false,
@@ -110,7 +110,7 @@ apiRouter.post('/auth/register', (req: Request, res: Response): any => {
     }
 
     const teacherId = 'tch-' + crypto.randomUUID();
-    const createdRow = backendDb.createTeacher({
+    const createdRow = await backendDb.createTeacher({
       id: teacherId,
       employeeCode,
       fullName,
@@ -150,7 +150,7 @@ apiRouter.post('/auth/register', (req: Request, res: Response): any => {
 });
 
 // 2. TEACHER LOGIN (Profile & Credential Matching)
-apiRouter.post('/auth/login', (req: Request, res: Response): any => {
+apiRouter.post('/auth/login', async (req: Request, res: Response): Promise<any> => {
   try {
     const { identifier, password } = req.body;
 
@@ -163,7 +163,7 @@ apiRouter.post('/auth/login', (req: Request, res: Response): any => {
     }
 
     // Match against database profile
-    const teacherRow = backendDb.getTeacherByIdentifier(identifier);
+    const teacherRow = await backendDb.getTeacherByIdentifier(identifier);
     if (!teacherRow) {
       return res.status(401).json({
         success: false,
@@ -222,7 +222,7 @@ apiRouter.post('/auth/login', (req: Request, res: Response): any => {
 });
 
 // 3. SEND OTP
-apiRouter.post('/auth/otp/send', (req: Request, res: Response): any => {
+apiRouter.post('/auth/otp/send', async (req: Request, res: Response): Promise<any> => {
   const { phoneNumber } = req.body;
   if (!phoneNumber) {
     return res.status(400).json({
@@ -233,7 +233,7 @@ apiRouter.post('/auth/otp/send', (req: Request, res: Response): any => {
   }
 
   const otpCode = '123456';
-  backendDb.saveOtp(phoneNumber, otpCode);
+  await backendDb.saveOtp(phoneNumber, otpCode);
 
   return res.json({
     success: true,
@@ -244,7 +244,7 @@ apiRouter.post('/auth/otp/send', (req: Request, res: Response): any => {
 });
 
 // 4. VERIFY OTP
-apiRouter.post('/auth/otp/verify', (req: Request, res: Response): any => {
+apiRouter.post('/auth/otp/verify', async (req: Request, res: Response): Promise<any> => {
   const { phoneNumber, otp } = req.body;
   if (!phoneNumber || !otp) {
     return res.status(400).json({
@@ -254,7 +254,7 @@ apiRouter.post('/auth/otp/verify', (req: Request, res: Response): any => {
     });
   }
 
-  const isValid = backendDb.verifyOtp(phoneNumber, otp) || otp === '123456';
+  const isValid = (await backendDb.verifyOtp(phoneNumber, otp)) || otp === '123456';
   if (!isValid) {
     return res.status(401).json({
       success: false,
@@ -263,9 +263,9 @@ apiRouter.post('/auth/otp/verify', (req: Request, res: Response): any => {
     });
   }
 
-  let teacherRow = backendDb.getTeacherByIdentifier(phoneNumber);
+  let teacherRow = await backendDb.getTeacherByIdentifier(phoneNumber);
   if (!teacherRow) {
-    teacherRow = backendDb.getTeacherByIdentifier('TCH-1042');
+    teacherRow = await backendDb.getTeacherByIdentifier('TCH-1042');
   }
 
   const teacher = formatTeacherResponse(teacherRow);
@@ -286,9 +286,9 @@ apiRouter.post('/auth/otp/verify', (req: Request, res: Response): any => {
 });
 
 // 5. GET TEACHER PROFILE
-apiRouter.get('/teacher/profile', requireRole('teacher'), (req: Request, res: Response): any => {
+apiRouter.get('/teacher/profile', requireRole('teacher'), async (req: Request, res: Response): Promise<any> => {
   const teacherId = (req as Request & { auth?: { sub: string } }).auth!.sub;
-  const row = backendDb.getTeacherById(teacherId);
+  const row = await backendDb.getTeacherById(teacherId);
 
   if (!row) {
     return res.status(404).json({
@@ -306,7 +306,7 @@ apiRouter.get('/teacher/profile', requireRole('teacher'), (req: Request, res: Re
 });
 
 // 6. ENROLL / REGISTER FACE EMBEDDING IN PROFILE
-apiRouter.post('/teacher/face/register', requireRole('teacher'), (req: Request, res: Response): any => {
+apiRouter.post('/teacher/face/register', requireRole('teacher'), async (req: Request, res: Response): Promise<any> => {
   const { teacherId, faceEmbeddingVector, anglesCaptured, qualityScore } = req.body;
   const authenticatedTeacherId = (req as Request & { auth?: { sub: string } }).auth!.sub;
 
@@ -326,7 +326,7 @@ apiRouter.post('/teacher/face/register', requireRole('teacher'), (req: Request, 
     qualityScore: qualityScore || 0.98,
   };
 
-  const updatedRow = backendDb.updateTeacherFace(teacherId, embeddingObj);
+  const updatedRow = await backendDb.updateTeacherFace(teacherId, embeddingObj);
   if (!updatedRow) {
     return res.status(404).json({
       success: false,
@@ -372,7 +372,7 @@ function mapBackendLogToRecord(row: any) {
 // ADMIN AUTHENTICATION & MULTI-TIER ROLES
 // Supports: state_admin, district_admin, school_admin
 // ==========================================
-apiRouter.post('/admin/auth/login', (req: Request, res: Response): any => {
+apiRouter.post('/admin/auth/login', async (req: Request, res: Response): Promise<any> => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const now = Date.now();
   const attempt = adminLoginAttempts.get(ip);
@@ -388,7 +388,7 @@ apiRouter.post('/admin/auth/login', (req: Request, res: Response): any => {
   }
 
   // 1. Check in database admin_users table
-  const adminUser = backendDb.getAdminUserByEmail(emailOrUsername);
+  const adminUser = await backendDb.getAdminUserByEmail(emailOrUsername);
   if (adminUser) {
     const isMatch = BackendDatabase.verifyPassword(password, adminUser.password_hash, adminUser.password_salt);
     if (!isMatch) {
@@ -468,20 +468,19 @@ apiRouter.post('/admin/auth/login', (req: Request, res: Response): any => {
 // ==========================================
 // SCHOOLS MANAGEMENT API
 // ==========================================
-apiRouter.get('/schools', requireAdminTier(), (req: Request, res: Response): any => {
+apiRouter.get('/schools', requireAdminTier(), async (req: Request, res: Response): Promise<any> => {
   const districtId = typeof req.query.districtId === 'string' ? req.query.districtId : undefined;
   const search = typeof req.query.search === 'string' ? req.query.search : undefined;
 
   const auth = (req as Request & { auth?: AuthClaims }).auth;
-  // If district_admin, enforce their own district
   const effectiveDistrict = (auth?.role === 'district_admin' && auth.jurisdictionDistrictId) ? auth.jurisdictionDistrictId : districtId;
 
-  const schools = backendDb.getSchools({ districtId: effectiveDistrict, search });
+  const schools = await backendDb.getSchools({ districtId: effectiveDistrict, search });
   return res.json({ success: true, data: schools, timestamp: new Date().toISOString() });
 });
 
-apiRouter.get('/schools/:id', requireAdminTier(), (req: Request, res: Response): any => {
-  const school = backendDb.getSchoolById(req.params.id);
+apiRouter.get('/schools/:id', requireAdminTier(), async (req: Request, res: Response): Promise<any> => {
+  const school = await backendDb.getSchoolById(req.params.id);
   if (!school) {
     return res.status(404).json({ success: false, message: 'School not found.' });
   }
@@ -489,7 +488,7 @@ apiRouter.get('/schools/:id', requireAdminTier(), (req: Request, res: Response):
 });
 
 // State Admin can create a new school
-apiRouter.post('/schools', requireAdminTier(['state_admin', 'admin']), (req: Request, res: Response): any => {
+apiRouter.post('/schools', requireAdminTier(['state_admin', 'admin']), async (req: Request, res: Response): Promise<any> => {
   try {
     const code = req.body?.code || req.body?.school_code;
     const name = req.body?.name || req.body?.school_name;
@@ -512,7 +511,7 @@ apiRouter.post('/schools', requireAdminTier(['state_admin', 'admin']), (req: Req
       return res.status(400).json({ success: false, message: 'Valid latitude and longitude coordinates are required for the school geofence.' });
     }
 
-    const created = backendDb.createSchool({
+    const created = await backendDb.createSchool({
       code,
       name,
       districtId,
@@ -534,10 +533,10 @@ apiRouter.post('/schools', requireAdminTier(['state_admin', 'admin']), (req: Req
 });
 
 // State Admin can edit school and save updated location coordinates
-apiRouter.put('/schools/:id', requireAdminTier(['state_admin', 'admin']), (req: Request, res: Response): any => {
+apiRouter.put('/schools/:id', requireAdminTier(['state_admin', 'admin']), async (req: Request, res: Response): Promise<any> => {
   try {
     const schoolId = req.params.id;
-    const existing = backendDb.getSchoolById(schoolId);
+    const existing = await backendDb.getSchoolById(schoolId);
     if (!existing) return res.status(404).json({ success: false, message: 'School not found.' });
 
     const updates = {
@@ -556,7 +555,7 @@ apiRouter.put('/schools/:id', requireAdminTier(['state_admin', 'admin']), (req: 
       isActive: req.body?.isActive ?? req.body?.is_active,
     };
 
-    const updated = backendDb.updateSchool(schoolId, updates);
+    const updated = await backendDb.updateSchool(schoolId, updates);
     return res.json({ success: true, message: 'School details and coordinates updated successfully.', data: updated });
   } catch (err: any) {
     return res.status(500).json({ success: false, message: err.message || 'Failed to update school.' });
@@ -564,7 +563,7 @@ apiRouter.put('/schools/:id', requireAdminTier(['state_admin', 'admin']), (req: 
 });
 
 // Direct coordinates update endpoint (convenience for State Admin map/coordinates editor)
-apiRouter.put('/schools/:id/coordinates', requireAdminTier(['state_admin', 'admin']), (req: Request, res: Response): any => {
+apiRouter.put('/schools/:id/coordinates', requireAdminTier(['state_admin', 'admin']), async (req: Request, res: Response): Promise<any> => {
   try {
     const schoolId = req.params.id;
     const { latitude, longitude, radiusMeters } = req.body;
@@ -574,7 +573,7 @@ apiRouter.put('/schools/:id/coordinates', requireAdminTier(['state_admin', 'admi
     }
 
     const radius = radiusMeters ? Number(radiusMeters) : 150;
-    const updated = backendDb.updateSchoolCoordinates(schoolId, Number(latitude), Number(longitude), radius);
+    const updated = await backendDb.updateSchoolCoordinates(schoolId, Number(latitude), Number(longitude), radius);
     if (!updated) return res.status(404).json({ success: false, message: 'School not found.' });
 
     return res.json({
@@ -590,15 +589,15 @@ apiRouter.put('/schools/:id/coordinates', requireAdminTier(['state_admin', 'admi
 // ==========================================
 // DISTRICTS API
 // ==========================================
-apiRouter.get('/districts', requireAdminTier(), (_req: Request, res: Response): any => {
-  const districts = backendDb.getDistricts();
+apiRouter.get('/districts', requireAdminTier(), async (_req: Request, res: Response): Promise<any> => {
+  const districts = await backendDb.getDistricts();
   return res.json({ success: true, data: districts, timestamp: new Date().toISOString() });
 });
 
 // ==========================================
 // TEACHERS MANAGEMENT & REASSIGNMENT (State Admin)
 // ==========================================
-apiRouter.get('/admin/teachers', requireAdminTier(), (req: Request, res: Response): any => {
+apiRouter.get('/admin/teachers', requireAdminTier(), async (req: Request, res: Response): Promise<any> => {
   const auth = (req as Request & { auth?: AuthClaims }).auth;
   let schoolId = typeof req.query.schoolId === 'string' ? req.query.schoolId : undefined;
   let districtId = typeof req.query.districtId === 'string' ? req.query.districtId : undefined;
@@ -611,12 +610,12 @@ apiRouter.get('/admin/teachers', requireAdminTier(), (req: Request, res: Respons
     districtId = auth.jurisdictionDistrictId;
   }
 
-  const teachers = backendDb.getTeachers({ schoolId, districtId, search });
+  const teachers = await backendDb.getTeachers({ schoolId, districtId, search });
   return res.json({ success: true, data: teachers, timestamp: new Date().toISOString() });
 });
 
 // State Admin has capability to change school of a teacher
-apiRouter.put('/admin/teachers/:id/school', requireAdminTier(['state_admin', 'admin']), (req: Request, res: Response): any => {
+apiRouter.put('/admin/teachers/:id/school', requireAdminTier(['state_admin', 'admin']), async (req: Request, res: Response): Promise<any> => {
   try {
     const teacherId = req.params.id;
     const { newSchoolId, newSchoolName } = req.body;
@@ -625,12 +624,12 @@ apiRouter.put('/admin/teachers/:id/school', requireAdminTier(['state_admin', 'ad
       return res.status(400).json({ success: false, message: 'newSchoolId is required to reassign a teacher.' });
     }
 
-    const targetSchool = backendDb.getSchoolById(newSchoolId);
+    const targetSchool = await backendDb.getSchoolById(newSchoolId);
     if (!targetSchool) {
       return res.status(404).json({ success: false, message: `Destination school with ID "${newSchoolId}" does not exist.` });
     }
 
-    const updated = backendDb.updateTeacherSchool(teacherId, newSchoolId, newSchoolName || targetSchool.name);
+    const updated = await backendDb.updateTeacherSchool(teacherId, newSchoolId, newSchoolName || targetSchool.name);
     if (!updated) {
       return res.status(404).json({ success: false, message: 'Teacher profile not found.' });
     }
@@ -648,17 +647,17 @@ apiRouter.put('/admin/teachers/:id/school', requireAdminTier(['state_admin', 'ad
 // ==========================================
 // TEACHER ATTENDANCE PUNCH & SYNC
 // ==========================================
-apiRouter.post('/attendance/punch', requireRole('teacher'), (req: Request, res: Response): any => {
+apiRouter.post('/attendance/punch', requireRole('teacher'), async (req: Request, res: Response): Promise<any> => {
   const claim = (req as Request & { auth?: { sub: string } }).auth;
-  const result = backendDb.saveAttendanceSync(req.body, claim!.sub);
+  const result = await backendDb.saveAttendanceSync(req.body, claim!.sub);
   if (!result.success) return res.status(result.status).json({ success: false, message: result.message, timestamp: new Date().toISOString() });
   return res.status(result.created ? 201 : 200).json({ success: true, data: result.record, message: result.created ? 'Attendance recorded on the server.' : 'Attendance was already synchronized.', timestamp: new Date().toISOString() });
 });
 
 // TODAY ATTENDANCE STATUS
-apiRouter.get('/attendance/today', requireRole('teacher'), (req: Request, res: Response): any => {
+apiRouter.get('/attendance/today', requireRole('teacher'), async (req: Request, res: Response): Promise<any> => {
   const teacherId = (req as Request & { auth?: { sub: string } }).auth!.sub;
-  const teacher = backendDb.getTeacherById(teacherId);
+  const teacher = await backendDb.getTeacherById(teacherId);
   const employeeCode = teacher?.employee_code || '';
 
   if (!teacherId && !employeeCode) {
@@ -669,7 +668,7 @@ apiRouter.get('/attendance/today', requireRole('teacher'), (req: Request, res: R
     });
   }
 
-  const { checkIn, checkOut } = backendDb.getTodayAttendance(teacherId, employeeCode);
+  const { checkIn, checkOut } = await backendDb.getTodayAttendance(teacherId, employeeCode);
 
   return res.json({
     success: true,
@@ -682,12 +681,12 @@ apiRouter.get('/attendance/today', requireRole('teacher'), (req: Request, res: R
 });
 
 // ATTENDANCE HISTORY
-apiRouter.get('/attendance/history', requireRole('teacher'), (req: Request, res: Response): any => {
+apiRouter.get('/attendance/history', requireRole('teacher'), async (req: Request, res: Response): Promise<any> => {
   const teacherId = (req as Request & { auth?: { sub: string } }).auth!.sub;
-  const teacher = backendDb.getTeacherById(teacherId);
+  const teacher = await backendDb.getTeacherById(teacherId);
   const employeeCode = teacher?.employee_code || '';
 
-  const rows = backendDb.getAttendanceHistory(teacherId, employeeCode);
+  const rows = await backendDb.getAttendanceHistory(teacherId, employeeCode);
   const records = rows.map(mapBackendLogToRecord);
 
   return res.json({
@@ -698,26 +697,26 @@ apiRouter.get('/attendance/history', requireRole('teacher'), (req: Request, res:
 });
 
 // TEACHER SYNC ENDPOINT (Offline teacher profile synchronization)
-apiRouter.post('/sync/teacher', (req: Request, res: Response): any => {
+apiRouter.post('/sync/teacher', async (req: Request, res: Response): Promise<any> => {
   try {
     const teacherData = req.body?.teacher || req.body;
     if (!teacherData || !teacherData.employeeCode || !teacherData.fullName) {
       return res.status(400).json({ success: false, message: 'Valid teacher profile data is required.' });
     }
 
-    let existing = backendDb.getTeacherByIdentifier(teacherData.employeeCode);
+    let existing = await backendDb.getTeacherByIdentifier(teacherData.employeeCode);
     if (!existing && teacherData.id) {
-      existing = backendDb.getTeacherById(teacherData.id);
+      existing = await backendDb.getTeacherById(teacherData.id);
     }
 
     let teacherRow;
     if (existing) {
       if (teacherData.faceEmbedding && !existing.face_registered) {
-        backendDb.updateTeacherFace(existing.id, teacherData.faceEmbedding);
+        await backendDb.updateTeacherFace(existing.id, teacherData.faceEmbedding);
       }
-      teacherRow = backendDb.getTeacherById(existing.id);
+      teacherRow = await backendDb.getTeacherById(existing.id);
     } else {
-      teacherRow = backendDb.createTeacher({
+      teacherRow = await backendDb.createTeacher({
         id: teacherData.id || ('tch-' + crypto.randomUUID()),
         employeeCode: teacherData.employeeCode,
         fullName: teacherData.fullName,
@@ -758,7 +757,7 @@ apiRouter.post('/sync/teacher', (req: Request, res: Response): any => {
 });
 
 // BATCH SYNC ENDPOINT (SyncEngine integration - supports authenticated & offline recovery)
-apiRouter.post('/sync/batch', (req: Request, res: Response): any => {
+apiRouter.post('/sync/batch', async (req: Request, res: Response): Promise<any> => {
   const authorization = req.headers.authorization || '';
   const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
   const claims = token ? readToken(token) : null;
@@ -774,7 +773,7 @@ apiRouter.post('/sync/batch', (req: Request, res: Response): any => {
 
   for (const entry of entries) {
     const effectiveTeacherId = defaultTeacherId || entry?.attendance?.teacherId || '';
-    const result = backendDb.saveAttendanceSync(entry, effectiveTeacherId);
+    const result = await backendDb.saveAttendanceSync(entry, effectiveTeacherId);
     if (result.success) {
       syncedIds.push(String(entry?.attendance?.id || ''));
     } else {
@@ -797,7 +796,7 @@ apiRouter.post('/sync/batch', (req: Request, res: Response): any => {
 // ==========================================
 // ADMIN ATTENDANCE & SUMMARY WITH JURISDICTION SCOPING
 // ==========================================
-apiRouter.get('/admin/attendance', requireAdminTier(), (req: Request, res: Response): any => {
+apiRouter.get('/admin/attendance', requireAdminTier(), async (req: Request, res: Response): Promise<any> => {
   const auth = (req as Request & { auth?: AuthClaims }).auth;
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
   const offset = Math.max(Number(req.query.offset) || 0, 0);
@@ -812,7 +811,7 @@ apiRouter.get('/admin/attendance', requireAdminTier(), (req: Request, res: Respo
     districtId = auth.jurisdictionDistrictId;
   }
 
-  const records = backendDb.getAdminAttendance({
+  const records = await backendDb.getAdminAttendance({
     from: typeof req.query.from === 'string' ? req.query.from : undefined,
     to: typeof req.query.to === 'string' ? req.query.to : undefined,
     teacher: typeof req.query.teacher === 'string' ? req.query.teacher : undefined,
@@ -827,7 +826,7 @@ apiRouter.get('/admin/attendance', requireAdminTier(), (req: Request, res: Respo
   return res.json({ success: true, data: records, timestamp: new Date().toISOString() });
 });
 
-apiRouter.get('/admin/attendance/summary', requireAdminTier(), (req: Request, res: Response): any => {
+apiRouter.get('/admin/attendance/summary', requireAdminTier(), async (req: Request, res: Response): Promise<any> => {
   const auth = (req as Request & { auth?: AuthClaims }).auth;
   let schoolId = typeof req.query.schoolId === 'string' ? req.query.schoolId : undefined;
   let districtId = typeof req.query.districtId === 'string' ? req.query.districtId : undefined;
@@ -838,16 +837,17 @@ apiRouter.get('/admin/attendance/summary', requireAdminTier(), (req: Request, re
     districtId = auth.jurisdictionDistrictId;
   }
 
+  const summary = await backendDb.getAdminAttendanceSummary({ schoolId, districtId });
   return res.json({
     success: true,
-    data: backendDb.getAdminAttendanceSummary({ schoolId, districtId }),
+    data: summary,
     timestamp: new Date().toISOString(),
   });
 });
 
 // Dynamic Geofence Zones: Returns active schools with their coordinates & radius from the database
-apiRouter.get('/attendance/geofence-zones', (_req: Request, res: Response): any => {
-  const schools = backendDb.getSchools();
+apiRouter.get('/attendance/geofence-zones', async (_req: Request, res: Response): Promise<any> => {
+  const schools = await backendDb.getSchools();
   const zones = schools.map((s) => ({
     id: s.id,
     name: s.name,

@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { apiRouter } from './routes';
+import { backendDb } from './db';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -75,10 +76,19 @@ if (fs.existsSync(ADMIN_DIST)) {
 }
 
 if (require.main === module) {
-  app.listen(Number(PORT), '0.0.0.0', () => {
-    console.log(`🚀 [Server] Running on http://0.0.0.0:${PORT}`);
-    console.log(`💻 [Multi-Tier Admin Web] Running on http://localhost:${PORT}/admin`);
-    console.log(`📡 Local Network Access: http://10.160.91.199:${PORT}/api`);
-    console.log(`📡 Database loaded and ready at server/data/backend.db`);
+  backendDb.init().then(() => {
+    app.listen(Number(PORT), '0.0.0.0', () => {
+      console.log(`🚀 [Server] Running on http://0.0.0.0:${PORT}`);
+      console.log(`💻 [Multi-Tier Admin Web] Running on http://localhost:${PORT}/admin`);
+      console.log(`📡 Local Network Access: http://10.160.91.199:${PORT}/api`);
+      if (process.env.TURSO_DATABASE_URL) {
+        console.log(`🌐 [Database] Connected to online Turso Cloud database: ${process.env.TURSO_DATABASE_URL}`);
+      } else {
+        console.log(`📡 [Database] Loaded local SQLite file at server/data/backend.db`);
+      }
+    });
+  }).catch((err) => {
+    console.error('❌ Failed to initialize database:', err);
+    process.exit(1);
   });
 }

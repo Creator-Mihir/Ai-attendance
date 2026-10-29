@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import { createClient, Client } from '@libsql/client';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -45,13 +45,55 @@ export interface AdminUserRecord {
 }
 
 export class BackendDatabase {
-  public db: DatabaseSync;
+  public client: Client;
+  private initialized: boolean = false;
+  private initPromise: Promise<void> | null = null;
 
-  constructor(filePath: string = DB_FILE) {
-    this.db = new DatabaseSync(filePath);
-    this.initTables();
-    this.seedDefaultSchoolsAndAdmins();
-    this.seedDefaultTeacher();
+  constructor(filePath?: string) {
+    const tursoUrl = process.env.TURSO_DATABASE_URL;
+    const tursoToken = process.env.TURSO_AUTH_TOKEN;
+
+    if (tursoUrl && !filePath) {
+      this.client = createClient({
+        url: tursoUrl,
+        authToken: tursoToken,
+      });
+    } else {
+      this.client = createClient({
+        url: `file:${filePath || DB_FILE}`,
+      });
+    }
+  }
+
+  public async init(): Promise<void> {
+    if (this.initialized) return;
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = (async () => {
+      await this.initTables();
+      await this.seedDefaultSchoolsAndAdmins();
+      await this.seedDefaultTeacher();
+      this.initialized = true;
+    })();
+
+    return this.initPromise;
+  }
+
+  public async all<T = any>(sql: string, args: any[] = []): Promise<T[]> {
+    await this.init();
+    const res = await this.client.execute({ sql, args });
+    return res.rows as unknown as T[];
+  }
+
+  public async get<T = any>(sql: string, args: any[] = []): Promise<T | null> {
+    await this.init();
+    const res = await this.client.execute({ sql, args });
+    return (res.rows[0] as unknown as T) || null;
+  }
+
+  public async run(sql: string, args: any[] = []): Promise<void> {
+    await this.init();
+    await this.client.execute({ sql, args });
   }
 
   public static hashPassword(password: string, salt?: string): { hash: string; salt: string } {
@@ -65,8 +107,8 @@ export class BackendDatabase {
     return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(computed, 'hex'));
   }
 
-  private initTables(): void {
-    this.db.exec(`
+  private async initTables(): Promise<void> {
+    await this.client.execute(`
       CREATE TABLE IF NOT EXISTS teachers (
         id TEXT PRIMARY KEY,
         employee_code TEXT NOT NULL UNIQUE,
@@ -89,7 +131,9 @@ export class BackendDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+    `);
 
+    await this.client.execute(`
       CREATE TABLE IF NOT EXISTS schools (
         id TEXT PRIMARY KEY,
         code TEXT UNIQUE NOT NULL,
@@ -108,7 +152,9 @@ export class BackendDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+    `);
 
+    await this.client.execute(`
       CREATE TABLE IF NOT EXISTS admin_users (
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
@@ -123,7 +169,9 @@ export class BackendDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+    `);
 
+    await this.client.execute(`
       CREATE TABLE IF NOT EXISTS attendance_logs (
         id TEXT PRIMARY KEY,
         teacher_id TEXT NOT NULL,
@@ -145,7 +193,9 @@ export class BackendDatabase {
         device_integrity_passed INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL
       );
+    `);
 
+    await this.client.execute(`
       CREATE TABLE IF NOT EXISTS verification_records (
         id TEXT PRIMARY KEY,
         attendance_id TEXT,
@@ -163,7 +213,9 @@ export class BackendDatabase {
         timestamp TEXT NOT NULL,
         meta_json TEXT
       );
+    `);
 
+    await this.client.execute(`
       CREATE TABLE IF NOT EXISTS otps (
         phone_number TEXT PRIMARY KEY,
         otp_code TEXT NOT NULL,
@@ -171,23 +223,23 @@ export class BackendDatabase {
       );
     `);
 
-    // Dynamic schema migration: ensure school_id column exists on existing teachers table
+    // Schema migration check for school_id
     try {
-      const teacherColumns = this.db.prepare("PRAGMA table_info(teachers)").all() as any[];
+      const res = await this.client.execute("PRAGMA table_info(teachers)");
+      const teacherColumns = res.rows as any[];
       const hasSchoolId = teacherColumns.some((col) => col.name === 'school_id');
       if (!hasSchoolId) {
-        this.db.exec("ALTER TABLE teachers ADD COLUMN school_id TEXT;");
+        await this.client.execute("ALTER TABLE teachers ADD COLUMN school_id TEXT;");
       }
-      this.db.exec("UPDATE teachers SET school_id = school_branch_id WHERE school_id IS NULL OR school_id = '';");
+      await this.client.execute("UPDATE teachers SET school_id = school_branch_id WHERE school_id IS NULL OR school_id = '';");
     } catch (e) {
       console.error('[DB] Migration verification error:', e);
     }
   }
 
-  public seedDefaultSchoolsAndAdmins(): void {
+  public async seedDefaultSchoolsAndAdmins(): Promise<void> {
     const now = new Date().toISOString();
 
-    // 1. Seed initial schools with exact coordinates if not present
     const schoolsToSeed = [
       {
         id: 'branch-main-01',
@@ -251,23 +303,21 @@ export class BackendDatabase {
       },
     ];
 
-    const insertSchoolStmt = this.db.prepare(`
-      INSERT OR IGNORE INTO schools (
-        id, code, name, district_id, district_name, state,
-        latitude, longitude, radius_meters, address, principal_name,
-        contact_email, contact_phone, is_active, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-    `);
-
     for (const sch of schoolsToSeed) {
-      insertSchoolStmt.run(
-        sch.id, sch.code, sch.name, sch.district_id, sch.district_name, sch.state,
-        sch.latitude, sch.longitude, sch.radius_meters, sch.address, sch.principal_name,
-        sch.contact_email, sch.contact_phone, now, now
-      );
+      await this.client.execute({
+        sql: `INSERT OR IGNORE INTO schools (
+          id, code, name, district_id, district_name, state,
+          latitude, longitude, radius_meters, address, principal_name,
+          contact_email, contact_phone, is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        args: [
+          sch.id, sch.code, sch.name, sch.district_id, sch.district_name, sch.state,
+          sch.latitude, sch.longitude, sch.radius_meters, sch.address, sch.principal_name,
+          sch.contact_email, sch.contact_phone, now, now,
+        ],
+      });
     }
 
-    // 2. Seed Default Admins for State, District, and School tiers
     const adminsToSeed = [
       {
         id: 'adm-state-01',
@@ -302,28 +352,36 @@ export class BackendDatabase {
     ];
 
     for (const adm of adminsToSeed) {
-      const existing = this.db.prepare('SELECT id FROM admin_users WHERE email = ?').get(adm.email);
-      if (!existing) {
+      const existing = await this.client.execute({
+        sql: 'SELECT id FROM admin_users WHERE email = ?',
+        args: [adm.email],
+      });
+      if (!existing.rows.length) {
         const { hash, salt } = BackendDatabase.hashPassword(adm.password);
-        this.db.prepare(`
-          INSERT INTO admin_users (
+        await this.client.execute({
+          sql: `INSERT INTO admin_users (
             id, username, email, password_hash, password_salt,
             full_name, role, jurisdiction_district_id, jurisdiction_school_id,
             is_active, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-        `).run(
-          adm.id, adm.username, adm.email, hash, salt,
-          adm.fullName, adm.role, adm.jurisdiction_district_id, adm.jurisdiction_school_id,
-          now, now
-        );
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+          args: [
+            adm.id, adm.username, adm.email, hash, salt,
+            adm.fullName, adm.role, adm.jurisdiction_district_id, adm.jurisdiction_school_id,
+            now, now,
+          ],
+        });
       }
     }
   }
 
-  private seedDefaultTeacher(): void {
-    const existing = this.db.prepare('SELECT id FROM teachers WHERE employee_code = ?').get('TCH-1042');
+  private async seedDefaultTeacher(): Promise<void> {
+    const existing = await this.client.execute({
+      sql: 'SELECT id FROM teachers WHERE employee_code = ?',
+      args: ['TCH-1042'],
+    });
     const now = new Date().toISOString();
-    if (!existing) {
+
+    if (!existing.rows.length) {
       const { hash, salt } = BackendDatabase.hashPassword('password123');
       const seedFaceEmbedding = {
         version: 'MobileFaceNet-Offline-v2.1',
@@ -333,39 +391,39 @@ export class BackendDatabase {
         qualityScore: 0.98,
       };
 
-      this.db.prepare(`
-        INSERT INTO teachers (
+      await this.client.execute({
+        sql: `INSERT INTO teachers (
           id, employee_code, full_name, email, phone_number,
           password_hash, password_salt, department, designation,
           avatar_url, face_registered, face_embedding_json,
           enrolled_device_id, school_id, school_branch_id, school_branch_name,
           joined_date, is_active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        'tch-8849-ae12',
-        'TCH-1042',
-        'Dr. Sarah Mitchell',
-        'sarah.mitchell@academy.edu',
-        '+1 (555) 234-5678',
-        hash,
-        salt,
-        'Department of Computer Science',
-        'Senior Faculty & Dept Head',
-        'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=400&auto=format&fit=crop',
-        1,
-        JSON.stringify(seedFaceEmbedding),
-        'DEV-IPHONE-16P',
-        'branch-main-01',
-        'branch-main-01',
-        'Metropolitan Science Academy - Main Campus',
-        '2021-08-10',
-        1,
-        now,
-        now
-      );
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          'tch-8849-ae12',
+          'TCH-1042',
+          'Dr. Sarah Mitchell',
+          'sarah.mitchell@academy.edu',
+          '+1 (555) 234-5678',
+          hash,
+          salt,
+          'Department of Computer Science',
+          'Senior Faculty & Dept Head',
+          'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=400&auto=format&fit=crop',
+          1,
+          JSON.stringify(seedFaceEmbedding),
+          'DEV-IPHONE-16P',
+          'branch-main-01',
+          'branch-main-01',
+          'Metropolitan Science Academy - Main Campus',
+          '2021-08-10',
+          1,
+          now,
+          now,
+        ],
+      });
     }
 
-    // Seed additional faculty across different schools to verify listing & transfer
     const extraFaculty = [
       {
         id: 'tch-2001-prof',
@@ -403,28 +461,32 @@ export class BackendDatabase {
     ];
 
     for (const f of extraFaculty) {
-      const exists = this.db.prepare('SELECT id FROM teachers WHERE employee_code = ?').get(f.code);
-      if (!exists) {
+      const exists = await this.client.execute({
+        sql: 'SELECT id FROM teachers WHERE employee_code = ?',
+        args: [f.code],
+      });
+      if (!exists.rows.length) {
         const { hash, salt } = BackendDatabase.hashPassword('password123');
-        this.db.prepare(`
-          INSERT INTO teachers (
+        await this.client.execute({
+          sql: `INSERT INTO teachers (
             id, employee_code, full_name, email, phone_number,
             password_hash, password_salt, department, designation,
             avatar_url, face_registered, face_embedding_json,
             enrolled_device_id, school_id, school_branch_id, school_branch_name,
             joined_date, is_active, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?, '2023-01-10', 1, ?, ?)
-        `).run(
-          f.id, f.code, f.name, f.email, f.phone,
-          hash, salt, f.dept, f.desig,
-          null, f.schoolId, f.schoolId, f.schoolName, now, now
-        );
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?, '2023-01-10', 1, ?, ?)`,
+          args: [
+            f.id, f.code, f.name, f.email, f.phone,
+            hash, salt, f.dept, f.desig,
+            null, f.schoolId, f.schoolId, f.schoolName, now, now,
+          ],
+        });
       }
     }
   }
 
   // SCHOOLS METHODS
-  public getSchools(filters?: { districtId?: string; search?: string }): any[] {
+  public async getSchools(filters?: { districtId?: string; search?: string }): Promise<any[]> {
     const where: string[] = ['s.is_active = 1'];
     const params: any[] = [];
     if (filters?.districtId) {
@@ -437,25 +499,25 @@ export class BackendDatabase {
       params.push(v, v, v);
     }
 
-    return this.db.prepare(`
+    return this.all(`
       SELECT s.*,
         (SELECT COUNT(*) FROM teachers t WHERE COALESCE(t.school_id, t.school_branch_id) = s.id AND t.is_active = 1) AS teacher_count
       FROM schools s
       WHERE ${where.join(' AND ')}
       ORDER BY s.district_name ASC, s.name ASC
-    `).all(...params) as any[];
+    `, params);
   }
 
-  public getSchoolById(id: string): any {
-    return this.db.prepare(`
+  public async getSchoolById(id: string): Promise<any> {
+    return this.get(`
       SELECT s.*,
         (SELECT COUNT(*) FROM teachers t WHERE COALESCE(t.school_id, t.school_branch_id) = s.id AND t.is_active = 1) AS teacher_count
       FROM schools s
       WHERE s.id = ?
-    `).get(id);
+    `, [id]);
   }
 
-  public createSchool(data: {
+  public async createSchool(data: {
     id?: string;
     code: string;
     name: string;
@@ -469,16 +531,16 @@ export class BackendDatabase {
     principalName?: string;
     contactEmail?: string;
     contactPhone?: string;
-  }): any {
+  }): Promise<any> {
     const id = data.id || 'sch-' + crypto.randomUUID();
     const now = new Date().toISOString();
-    this.db.prepare(`
+    await this.run(`
       INSERT INTO schools (
         id, code, name, district_id, district_name, state,
         latitude, longitude, radius_meters, address, principal_name,
         contact_email, contact_phone, is_active, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-    `).run(
+    `, [
       id,
       data.code.trim().toUpperCase(),
       data.name.trim(),
@@ -493,12 +555,12 @@ export class BackendDatabase {
       data.contactEmail || null,
       data.contactPhone || null,
       now,
-      now
-    );
+      now,
+    ]);
     return this.getSchoolById(id);
   }
 
-  public updateSchool(id: string, updates: {
+  public async updateSchool(id: string, updates: {
     name?: string;
     code?: string;
     districtId?: string;
@@ -512,8 +574,8 @@ export class BackendDatabase {
     contactEmail?: string;
     contactPhone?: string;
     isActive?: boolean;
-  }): any {
-    const existing = this.getSchoolById(id);
+  }): Promise<any> {
+    const existing = await this.getSchoolById(id);
     if (!existing) return null;
 
     const now = new Date().toISOString();
@@ -531,39 +593,39 @@ export class BackendDatabase {
     const contactPhone = updates.contactPhone !== undefined ? updates.contactPhone : existing.contact_phone;
     const isActive = updates.isActive !== undefined ? (updates.isActive ? 1 : 0) : existing.is_active;
 
-    this.db.prepare(`
+    await this.run(`
       UPDATE schools
       SET name = ?, code = ?, district_id = ?, district_name = ?, state = ?,
           latitude = ?, longitude = ?, radius_meters = ?, address = ?,
           principal_name = ?, contact_email = ?, contact_phone = ?, is_active = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(
+    `, [
       name, code, districtId, districtName, state,
       latitude, longitude, radiusMeters, address,
       principalName, contactEmail, contactPhone, isActive,
-      now, id
-    );
+      now, id,
+    ]);
 
     return this.getSchoolById(id);
   }
 
-  public updateSchoolCoordinates(id: string, latitude: number, longitude: number, radiusMeters: number): any {
-    const existing = this.getSchoolById(id);
+  public async updateSchoolCoordinates(id: string, latitude: number, longitude: number, radiusMeters: number): Promise<any> {
+    const existing = await this.getSchoolById(id);
     if (!existing) return null;
 
     const now = new Date().toISOString();
-    this.db.prepare(`
+    await this.run(`
       UPDATE schools
       SET latitude = ?, longitude = ?, radius_meters = ?, updated_at = ?
       WHERE id = ?
-    `).run(latitude, longitude, radiusMeters, now, id);
+    `, [latitude, longitude, radiusMeters, now, id]);
 
     return this.getSchoolById(id);
   }
 
-  public getDistricts(): any[] {
-    return this.db.prepare(`
+  public async getDistricts(): Promise<any[]> {
+    return this.all(`
       SELECT 
         district_id,
         district_name,
@@ -574,12 +636,12 @@ export class BackendDatabase {
       WHERE is_active = 1
       GROUP BY district_id, district_name, state
       ORDER BY district_name ASC
-    `).all() as any[];
+    `);
   }
 
   // TEACHER METHODS
-  public getTeacherById(id: string): any {
-    return this.db.prepare(`
+  public async getTeacherById(id: string): Promise<any> {
+    return this.get(`
       SELECT t.*,
         COALESCE(t.school_id, t.school_branch_id) AS school_id,
         COALESCE(s.name, t.school_branch_name) AS school_name,
@@ -591,12 +653,12 @@ export class BackendDatabase {
       FROM teachers t
       LEFT JOIN schools s ON s.id = COALESCE(t.school_id, t.school_branch_id)
       WHERE t.id = ?
-    `).get(id);
+    `, [id]);
   }
 
-  public getTeacherByIdentifier(identifier: string): any {
+  public async getTeacherByIdentifier(identifier: string): Promise<any> {
     const trimmed = identifier.trim().toLowerCase();
-    return this.db.prepare(`
+    return this.get(`
       SELECT t.*,
         COALESCE(t.school_id, t.school_branch_id) AS school_id,
         COALESCE(s.name, t.school_branch_name) AS school_name,
@@ -611,10 +673,10 @@ export class BackendDatabase {
          OR LOWER(t.email) = ? 
          OR t.phone_number = ?
       LIMIT 1
-    `).get(trimmed, trimmed, identifier.trim());
+    `, [trimmed, trimmed, identifier.trim()]);
   }
 
-  public getTeachers(filters?: { schoolId?: string; districtId?: string; search?: string }): any[] {
+  public async getTeachers(filters?: { schoolId?: string; districtId?: string; search?: string }): Promise<any[]> {
     const where: string[] = ['t.is_active = 1'];
     const params: any[] = [];
 
@@ -632,7 +694,7 @@ export class BackendDatabase {
       params.push(v, v, v, v);
     }
 
-    return this.db.prepare(`
+    return this.all(`
       SELECT t.*,
         COALESCE(t.school_id, t.school_branch_id) AS school_id,
         COALESCE(s.name, t.school_branch_name) AS school_name,
@@ -643,30 +705,30 @@ export class BackendDatabase {
       LEFT JOIN schools s ON s.id = COALESCE(t.school_id, t.school_branch_id)
       WHERE ${where.join(' AND ')}
       ORDER BY t.full_name ASC
-    `).all(...params) as any[];
+    `, params);
   }
 
-  public updateTeacherSchool(teacherId: string, newSchoolId: string, newSchoolName?: string): any {
-    const teacher = this.getTeacherById(teacherId);
+  public async updateTeacherSchool(teacherId: string, newSchoolId: string, newSchoolName?: string): Promise<any> {
+    const teacher = await this.getTeacherById(teacherId);
     if (!teacher) return null;
 
     let finalSchoolName = newSchoolName;
-    const school = this.getSchoolById(newSchoolId);
+    const school = await this.getSchoolById(newSchoolId);
     if (school) {
       finalSchoolName = school.name;
     }
 
     const now = new Date().toISOString();
-    this.db.prepare(`
+    await this.run(`
       UPDATE teachers
       SET school_id = ?, school_branch_id = ?, school_branch_name = ?, updated_at = ?
       WHERE id = ?
-    `).run(newSchoolId, newSchoolId, finalSchoolName || 'School Campus', now, teacherId);
+    `, [newSchoolId, newSchoolId, finalSchoolName || 'School Campus', now, teacherId]);
 
     return this.getTeacherById(teacherId);
   }
 
-  public createTeacher(teacher: {
+  public async createTeacher(teacher: {
     id: string;
     employeeCode: string;
     fullName: string;
@@ -680,7 +742,7 @@ export class BackendDatabase {
     schoolBranchName?: string;
     avatarUrl?: string;
     faceEmbedding?: any;
-  }): any {
+  }): Promise<any> {
     const now = new Date().toISOString();
     const { hash, salt } = BackendDatabase.hashPassword(teacher.password);
     const hasFace = Boolean(teacher.faceEmbedding);
@@ -689,11 +751,11 @@ export class BackendDatabase {
 
     let schoolName = teacher.schoolBranchName;
     if (!schoolName) {
-      const sch = this.getSchoolById(finalSchoolId);
+      const sch = await this.getSchoolById(finalSchoolId);
       schoolName = sch ? sch.name : 'Metropolitan Science Academy - Main Campus';
     }
 
-    this.db.prepare(`
+    await this.run(`
       INSERT INTO teachers (
         id, employee_code, full_name, email, phone_number,
         password_hash, password_salt, department, designation,
@@ -701,7 +763,7 @@ export class BackendDatabase {
         enrolled_device_id, school_id, school_branch_id, school_branch_name,
         joined_date, is_active, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       teacher.id,
       teacher.employeeCode.trim().toUpperCase(),
       teacher.fullName.trim(),
@@ -721,57 +783,55 @@ export class BackendDatabase {
       now.substring(0, 10),
       1,
       now,
-      now
-    );
+      now,
+    ]);
 
     return this.getTeacherById(teacher.id);
   }
 
-  public updateTeacherFace(teacherId: string, faceEmbedding: any): any {
+  public async updateTeacherFace(teacherId: string, faceEmbedding: any): Promise<any> {
     const now = new Date().toISOString();
     const faceJson = JSON.stringify(faceEmbedding);
 
-    this.db.prepare(`
+    await this.run(`
       UPDATE teachers 
       SET face_registered = 1, face_embedding_json = ?, updated_at = ?
       WHERE id = ?
-    `).run(faceJson, now, teacherId);
+    `, [faceJson, now, teacherId]);
 
     return this.getTeacherById(teacherId);
   }
 
   // ADMIN USERS METHODS
-  public getAdminUserByEmail(email: string): AdminUserRecord | null {
+  public async getAdminUserByEmail(email: string): Promise<AdminUserRecord | null> {
     const trimmed = email.trim().toLowerCase();
-    const row = this.db.prepare(`
+    return this.get(`
       SELECT * FROM admin_users 
       WHERE LOWER(email) = ? OR LOWER(username) = ? 
       LIMIT 1
-    `).get(trimmed, trimmed) as any;
-    return row || null;
+    `, [trimmed, trimmed]);
   }
 
-  public getAdminUserById(id: string): AdminUserRecord | null {
-    const row = this.db.prepare(`
+  public async getAdminUserById(id: string): Promise<AdminUserRecord | null> {
+    return this.get(`
       SELECT * FROM admin_users WHERE id = ?
-    `).get(id) as any;
-    return row || null;
+    `, [id]);
   }
 
   // ATTENDANCE METHODS WITH JURISDICTION SUPPORT
-  public saveAttendanceSync(entry: any, authenticatedTeacherId: string): { success: boolean; status: number; message: string; created?: boolean; record?: any } {
+  public async saveAttendanceSync(entry: any, authenticatedTeacherId: string): Promise<{ success: boolean; status: number; message: string; created?: boolean; record?: any }> {
     const record = entry?.attendance;
     const verification = entry?.verification;
     const fail = (status: number, message: string) => ({ success: false, status, message });
-    let teacher = this.getTeacherById(authenticatedTeacherId);
-    if (!teacher && record.employeeCode) {
-      teacher = this.getTeacherByIdentifier(record.employeeCode);
+    let teacher = await this.getTeacherById(authenticatedTeacherId);
+    if (!teacher && record?.employeeCode) {
+      teacher = await this.getTeacherByIdentifier(record.employeeCode);
     }
-    if (!teacher && entry.teacher) {
+    if (!teacher && entry?.teacher) {
       try {
-        teacher = this.createTeacher({
+        teacher = await this.createTeacher({
           id: entry.teacher.id || authenticatedTeacherId || ('tch-' + crypto.randomUUID()),
-          employeeCode: entry.teacher.employeeCode || record.employeeCode,
+          employeeCode: entry.teacher.employeeCode || record?.employeeCode,
           fullName: entry.teacher.fullName || 'Faculty Member',
           email: entry.teacher.email || undefined,
           phoneNumber: entry.teacher.phoneNumber || undefined,
@@ -791,14 +851,14 @@ export class BackendDatabase {
     if (!teacher || !teacher.is_active) {
       return fail(403, 'Teacher account is unavailable in database.');
     }
-    if (String(teacher.employee_code).toUpperCase() !== String(record.employeeCode).toUpperCase()) {
+    if (String(teacher.employee_code).toUpperCase() !== String(record?.employeeCode).toUpperCase()) {
       return fail(403, 'The attendance record employee code does not match the teacher account.');
     }
 
     const actualTeacherId = teacher.id;
 
     if (typeof record.id !== 'string' || !record.id || typeof record.verificationId !== 'string' || !record.verificationId) return fail(400, 'Attendance and verification IDs are required.');
-    if (verification.id !== record.verificationId || verification.passed !== true) return fail(400, 'The verification receipt is missing, mismatched, or failed.');
+    if (verification?.id !== record.verificationId || verification?.passed !== true) return fail(400, 'The verification receipt is missing, mismatched, or failed.');
     if (!['CHECK_IN', 'CHECK_OUT'].includes(record.punchType) || !Number.isFinite(Date.parse(record.timestamp))) return fail(400, 'Attendance type or timestamp is invalid.');
     if (!Number.isFinite(record.latitude) || !Number.isFinite(record.longitude) || !Number.isFinite(record.gpsAccuracyMeters) || record.gpsAccuracyMeters > 50 || record.isInsideGeofence !== true) return fail(400, 'A valid in-campus location fix is required.');
     if (record.verificationStatus !== 'verified' || !Number.isFinite(record.faceMatchScore) || !Number.isFinite(record.livenessScore)) return fail(400, 'Attendance verification fields are invalid.');
@@ -810,7 +870,8 @@ export class BackendDatabase {
       if (!checks.some((check: any) => check?.id === id && (check.status === 'PASS' || check.status === 'BYPASSED'))) return fail(400, `Required verification check did not pass: ${id}.`);
     }
     if (!checks.some((check: any) => check?.id === 'device_integrity' && ['PASS', 'BYPASSED'].includes(check.status))) return fail(400, 'Device integrity check evidence is missing.');
-    const existing = this.db.prepare('SELECT * FROM attendance_logs WHERE id = ?').get(record.id) as any;
+    
+    const existing = await this.get('SELECT * FROM attendance_logs WHERE id = ?', [record.id]);
     if (existing) {
       return { success: true, status: 200, message: 'Already synchronized.', created: false, record: existing };
     }
@@ -818,41 +879,46 @@ export class BackendDatabase {
     const now = new Date().toISOString();
     const date = record.timestamp.slice(0, 10);
     try {
-      this.db.exec('BEGIN IMMEDIATE');
-      this.db.prepare(`INSERT INTO attendance_logs (
-        id, teacher_id, employee_code, date, check_in_time, punch_type, timestamp, status,
-        verification_status, latitude, longitude, gps_accuracy, distance_meters, is_inside_geofence,
-        verification_id, liveness_score, face_match_score, device_integrity_passed, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        record.id, actualTeacherId, teacher.employee_code, date,
-        record.punchType === 'CHECK_IN' ? record.timestamp : null,
-        record.punchType, record.timestamp, record.status || 'PRESENT', 'verified',
-        record.latitude, record.longitude, record.gpsAccuracyMeters, record.distanceFromCampusMeters || 0,
-        1, record.verificationId, record.livenessScore, record.faceMatchScore,
-        record.deviceIntegrityPassed ? 1 : 0, record.createdAt || now
-      );
-      this.db.prepare(`INSERT INTO verification_records (
-        id, attendance_id, teacher_id, type, liveness_score, face_match_score, location_verified,
-        device_verified, liveness_passed, face_match_passed, status, rejection_reason,
-        rejection_message, timestamp, meta_json
-      ) VALUES (?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, 'passed', NULL, NULL, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET attendance_id = excluded.attendance_id, meta_json = excluded.meta_json`).run(
-        verification.id, record.id, actualTeacherId, verification.livenessScore ?? record.livenessScore,
-        verification.faceMatchScore ?? record.faceMatchScore, verification.geofencePassed ? 1 : 0,
-        verification.deviceIntegrityPassed ? 1 : 0, verification.livenessPassed ? 1 : 0,
-        verification.faceMatchPassed ? 1 : 0, verification.timestamp || record.timestamp,
-        JSON.stringify({ checks, auditMeta: verification.auditMeta || null })
-      );
-      this.db.exec('COMMIT');
-      const saved = this.db.prepare('SELECT * FROM attendance_logs WHERE id = ?').get(record.id);
+      await this.client.batch([
+        {
+          sql: `INSERT INTO attendance_logs (
+            id, teacher_id, employee_code, date, check_in_time, punch_type, timestamp, status,
+            verification_status, latitude, longitude, gps_accuracy, distance_meters, is_inside_geofence,
+            verification_id, liveness_score, face_match_score, device_integrity_passed, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            record.id, actualTeacherId, teacher.employee_code, date,
+            record.punchType === 'CHECK_IN' ? record.timestamp : null,
+            record.punchType, record.timestamp, record.status || 'PRESENT', 'verified',
+            record.latitude, record.longitude, record.gpsAccuracyMeters, record.distanceFromCampusMeters || 0,
+            1, record.verificationId, record.livenessScore, record.faceMatchScore,
+            record.deviceIntegrityPassed ? 1 : 0, record.createdAt || now,
+          ],
+        },
+        {
+          sql: `INSERT INTO verification_records (
+            id, attendance_id, teacher_id, type, liveness_score, face_match_score, location_verified,
+            device_verified, liveness_passed, face_match_passed, status, rejection_reason,
+            rejection_message, timestamp, meta_json
+          ) VALUES (?, ?, ?, 'initial', ?, ?, ?, ?, ?, ?, 'passed', NULL, NULL, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET attendance_id = excluded.attendance_id, meta_json = excluded.meta_json`,
+          args: [
+            verification.id, record.id, actualTeacherId, verification.livenessScore ?? record.livenessScore,
+            verification.faceMatchScore ?? record.faceMatchScore, verification.geofencePassed ? 1 : 0,
+            verification.deviceIntegrityPassed ? 1 : 0, verification.livenessPassed ? 1 : 0,
+            verification.faceMatchPassed ? 1 : 0, verification.timestamp || record.timestamp,
+            JSON.stringify({ checks, auditMeta: verification.auditMeta || null }),
+          ],
+        },
+      ]);
+      const saved = await this.get('SELECT * FROM attendance_logs WHERE id = ?', [record.id]);
       return { success: true, status: 201, message: 'Attendance synchronized.', created: true, record: saved };
     } catch (error) {
-      try { this.db.exec('ROLLBACK'); } catch {}
       return fail(409, error instanceof Error ? error.message : 'Attendance could not be stored.');
     }
   }
 
-  public getAdminAttendance(filters: {
+  public async getAdminAttendance(filters: {
     from?: string;
     to?: string;
     teacher?: string;
@@ -862,7 +928,7 @@ export class BackendDatabase {
     districtId?: string;
     limit: number;
     offset: number;
-  }): any[] {
+  }): Promise<any[]> {
     const where: string[] = [];
     const params: any[] = [];
 
@@ -898,7 +964,7 @@ export class BackendDatabase {
 
     params.push(filters.limit, filters.offset);
 
-    return this.db.prepare(`
+    return this.all(`
       SELECT a.*, 
         t.full_name AS teacher_name, 
         t.employee_code AS teacher_code,
@@ -919,10 +985,10 @@ export class BackendDatabase {
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY a.timestamp DESC 
       LIMIT ? OFFSET ?
-    `).all(...params) as any[];
+    `, params);
   }
 
-  public getAdminAttendanceSummary(filters?: { schoolId?: string; districtId?: string }): any {
+  public async getAdminAttendanceSummary(filters?: { schoolId?: string; districtId?: string }): Promise<any> {
     const today = new Date().toISOString().slice(0, 10);
     const where: string[] = [];
     const params: any[] = [today, today, today];
@@ -936,7 +1002,7 @@ export class BackendDatabase {
       params.push(filters.districtId);
     }
 
-    return this.db.prepare(`
+    return this.get(`
       SELECT 
         COUNT(a.id) AS totalRecords,
         SUM(CASE WHEN a.date = ? THEN 1 ELSE 0 END) AS todayRecords,
@@ -947,10 +1013,10 @@ export class BackendDatabase {
       JOIN teachers t ON t.id = a.teacher_id
       LEFT JOIN schools s ON s.id = COALESCE(t.school_id, t.school_branch_id)
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-    `).get(...params);
+    `, params);
   }
 
-  public createAttendanceLog(log: any): void {
+  public async createAttendanceLog(log: any): Promise<void> {
     const now = new Date().toISOString();
     const dateStr = log.date || (log.timestamp ? log.timestamp.substring(0, 10) : now.substring(0, 10));
     const empCode = log.employeeCode || log.employee_code || 'TCH-FACULTY';
@@ -958,14 +1024,14 @@ export class BackendDatabase {
     const dist = log.distanceMeters ?? log.distance_meters ?? log.distanceFromCampusMeters ?? 0;
     const gpsAcc = log.gpsAccuracy ?? log.gps_accuracy ?? log.gpsAccuracyMeters ?? null;
 
-    this.db.prepare(`
+    await this.run(`
       INSERT OR REPLACE INTO attendance_logs (
         id, teacher_id, employee_code, date, check_in_time, punch_type,
         timestamp, status, verification_status, latitude, longitude,
         gps_accuracy, distance_meters, is_inside_geofence, verification_id,
         liveness_score, face_match_score, device_integrity_passed, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       log.id ?? '',
       log.teacherId || log.teacher_id || 'tch-unknown',
       empCode,
@@ -984,40 +1050,40 @@ export class BackendDatabase {
       log.livenessScore ?? log.liveness_score ?? null,
       log.faceMatchScore ?? log.face_match_score ?? null,
       log.deviceIntegrityPassed !== false ? 1 : 0,
-      log.createdAt || log.created_at || now
-    );
+      log.createdAt || log.created_at || now,
+    ]);
   }
 
-  public getTodayAttendance(teacherId: string, employeeCode?: string): { checkIn?: any; checkOut?: any } {
+  public async getTodayAttendance(teacherId: string, employeeCode?: string): Promise<{ checkIn?: any; checkOut?: any }> {
     const todayUtc = new Date().toISOString().substring(0, 10);
-    const rows = this.db.prepare(`
+    const rows = await this.all(`
       SELECT * FROM attendance_logs 
       WHERE (teacher_id = ? OR employee_code = ?)
         AND (date = ? OR date = date('now') OR timestamp LIKE ? || '%')
       ORDER BY timestamp ASC
-    `).all(teacherId, employeeCode || teacherId, todayUtc, todayUtc) as any[];
+    `, [teacherId, employeeCode || teacherId, todayUtc, todayUtc]);
 
     const checkIn = rows.find(r => r.punch_type === 'CHECK_IN');
     const checkOut = rows.find(r => r.punch_type === 'CHECK_OUT');
     return { checkIn, checkOut };
   }
 
-  public getAttendanceHistory(teacherId: string, employeeCode?: string): any[] {
-    return this.db.prepare(`
+  public async getAttendanceHistory(teacherId: string, employeeCode?: string): Promise<any[]> {
+    return this.all(`
       SELECT * FROM attendance_logs 
       WHERE teacher_id = ? OR employee_code = ?
       ORDER BY timestamp DESC
-    `).all(teacherId, employeeCode || teacherId) as any[];
+    `, [teacherId, employeeCode || teacherId]);
   }
 
-  public createVerificationRecord(record: any): void {
-    this.db.prepare(`
+  public async createVerificationRecord(record: any): Promise<void> {
+    await this.run(`
       INSERT OR REPLACE INTO verification_records (
         id, attendance_id, teacher_id, type, liveness_score, face_match_score,
         location_verified, device_verified, liveness_passed, face_match_passed,
         status, rejection_reason, rejection_message, timestamp, meta_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       record.id,
       record.attendanceId || null,
       record.teacherId,
@@ -1032,22 +1098,22 @@ export class BackendDatabase {
       record.rejectionReason || null,
       record.rejectionMessage || null,
       record.timestamp,
-      record.metaJson ? JSON.stringify(record.metaJson) : null
-    );
+      record.metaJson ? JSON.stringify(record.metaJson) : null,
+    ]);
   }
 
-  public saveOtp(phoneNumber: string, code: string, validSeconds: number = 300): void {
+  public async saveOtp(phoneNumber: string, code: string, validSeconds: number = 300): Promise<void> {
     const expiresAt = new Date(Date.now() + validSeconds * 1000).toISOString();
-    this.db.prepare(`
+    await this.run(`
       INSERT OR REPLACE INTO otps (phone_number, otp_code, expires_at)
       VALUES (?, ?, ?)
-    `).run(phoneNumber, code, expiresAt);
+    `, [phoneNumber, code, expiresAt]);
   }
 
-  public verifyOtp(phoneNumber: string, code: string): boolean {
-    const row: any = this.db.prepare(`
+  public async verifyOtp(phoneNumber: string, code: string): Promise<boolean> {
+    const row = await this.get(`
       SELECT * FROM otps WHERE phone_number = ? LIMIT 1
-    `).get(phoneNumber);
+    `, [phoneNumber]);
 
     if (!row) return false;
     if (new Date(row.expires_at).getTime() < Date.now()) return false;

@@ -133,7 +133,7 @@ async function runAdminTierTests() {
     assert(transferData.data.schoolBranchName === secondSchool.name, `Teacher reassigned to school name: ${secondSchool.name}`);
 
     // Verify persistence in DB
-    const persistedTeacher = backendDb.getTeacherById(sampleTeacher.id);
+    const persistedTeacher = await backendDb.getTeacherById(sampleTeacher.id);
     assert(persistedTeacher.school_id === secondSchool.id, 'Teacher school_id is persisted in database');
 
     // 9. Dynamic Geofence Zones endpoint serves DB schools

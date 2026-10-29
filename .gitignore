@@ -25,7 +25,7 @@ dist/
 *.db-shm
 *.sqlite
 *.sqlite3
-server/data/*.db
+server/data/
 tests/unit/*.db
 
 # Temporary dev scratchpads and notes
